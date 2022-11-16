@@ -12,3 +12,5 @@ serde = "1.0.147"
 tokio = { version = "1.21.2", features = ["full"] }
 teloxide = { version = "0.11.1", features = ["macros"] }
 warp = "0.3.3"
+regex = "1.7.0"
+once_cell = "1.16.0"

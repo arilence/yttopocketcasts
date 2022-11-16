@@ -1,9 +1,7 @@
-use std::vec;
-
 use dotenvy::dotenv;
-use serde::Deserialize;
-use teloxide::{prelude::*, utils::command::BotCommands};
 use warp::Filter;
+
+mod bot;
 
 #[tokio::main]
 async fn main() {
@@ -11,7 +9,7 @@ async fn main() {
     dotenv().ok();
 
     // Fly.io requires a webserver to determine availability
-    tokio::join!(run_webserver(), run_bot());
+    tokio::join!(run_webserver(), bot::run_bot());
 }
 
 async fn run_webserver() {
@@ -20,86 +18,4 @@ async fn run_webserver() {
     warp::serve(routes)
         .run(([0, 0, 0, 0, 0, 0, 0, 0], 8080))
         .await;
-}
-
-async fn run_bot() {
-    println!("Starting bot...");
-    let bot = Bot::from_env();
-    let parameters =
-        envy::from_env::<ConfigParameters>().expect("Failed to parse config parameters");
-    let handler = Update::filter_message().branch(
-        dptree::entry()
-            .filter_command::<Commands>()
-            .endpoint(commands_handler),
-    );
-
-    Dispatcher::builder(bot, handler)
-        .dependencies(dptree::deps![parameters])
-        // All message branches failed
-        .default_handler(|_upd| async move {
-            // println!("Unhandled update: {:?}", upd);
-            println!("Unhandled update");
-        })
-        // The dispatcher failed
-        .error_handler(LoggingErrorHandler::with_custom_text(
-            "An error has occurred in the dispatcher",
-        ))
-        .enable_ctrlc_handler()
-        .build()
-        .dispatch()
-        .await;
-}
-
-#[derive(Clone, Deserialize)]
-struct ConfigParameters {
-    // List of users allowed to use the bot
-    // TODO: Store these values in a database?
-    command_allow_list: Vec<UserId>,
-}
-
-#[derive(BotCommands, Clone)]
-#[command(rename_rule = "lowercase", description = "Bot Commands")]
-enum Commands {
-    #[command(description = "shows this message")]
-    Help,
-    #[command(description = "shows intro message")]
-    Start,
-    #[command(description = "sets Pocket Casts auth token to upload files")]
-    Auth(String),
-}
-
-async fn commands_handler(
-    cfg: ConfigParameters,
-    bot: Bot,
-    _me: teloxide::types::Me,
-    msg: Message,
-    cmd: Commands,
-) -> Result<(), teloxide::RequestError> {
-    let text = match cmd {
-        Commands::Help => Commands::descriptions().to_string(),
-        Commands::Start => {
-            String::from("This bot downloads Youtube videos as audio files and uploads them to your personal Pocket Casts account.\nTo start: /auth [pocketcasts token]")
-        }
-        Commands::Auth(token) => {
-            let mut response = String::new();
-            // Only users in the allow list are able to authenticate themselves
-            let incoming_user_id = msg.from().unwrap().id;
-            if !cfg
-                .command_allow_list
-                .iter()
-                .any(|&i| i == incoming_user_id)
-            {
-                response.push_str("You are not authorized to use this command.");
-            }
-            // TODO: Use dialogues instead of command arguments. User issues `/auth` and bot waits for a second message with the auth token.
-            else if token.is_empty() {
-                response.push_str("Invalid command, token not found.\nUsage: /auth [token]");
-            } else {
-                response.push_str("Token received. (But not really just yet)")
-            }
-            response
-        }
-    };
-    bot.send_message(msg.chat.id, text).await?;
-    Ok(())
 }
