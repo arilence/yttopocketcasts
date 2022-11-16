@@ -16,11 +16,8 @@ async fn main() {
 
 async fn run_webserver() {
     println!("Starting webserver...");
-    // Match any request and return hello world!
     let routes = warp::any().map(|| "Hello, World!");
-
     warp::serve(routes)
-        // ipv6 + ipv6 any addr
         .run(([0, 0, 0, 0, 0, 0, 0, 0], 8080))
         .await;
 }
@@ -81,7 +78,7 @@ async fn commands_handler(
     let text = match cmd {
         Commands::Help => Commands::descriptions().to_string(),
         Commands::Start => {
-            String::from("To start, use `/auth [token]`, with your Pocket Casts auth token.")
+            String::from("This bot downloads Youtube videos as audio files and uploads them to your personal Pocket Casts account.\nTo start: /auth [pocketcasts token]")
         }
         Commands::Auth(token) => {
             let mut response = String::new();
@@ -92,14 +89,13 @@ async fn commands_handler(
                 .iter()
                 .any(|&i| i == incoming_user_id)
             {
-                response.push_str("You are not authorized.");
+                response.push_str("You are not authorized to use this command.");
             }
             // TODO: Use dialogues instead of command arguments. User issues `/auth` and bot waits for a second message with the auth token.
             else if token.is_empty() {
-                response
-                    .push_str("Token not found, please include token as part of command argument.")
+                response.push_str("Invalid command, token not found.\nUsage: /auth [token]");
             } else {
-                response.push_str("Token received.")
+                response.push_str("Token received. (But not really just yet)")
             }
             response
         }
