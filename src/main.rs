@@ -3,12 +3,29 @@ use std::vec;
 use dotenvy::dotenv;
 use serde::Deserialize;
 use teloxide::{prelude::*, utils::command::BotCommands};
+use warp::Filter;
 
 #[tokio::main]
 async fn main() {
     // Load environment varilable from .env if available
     dotenv().ok();
 
+    // Fly.io requires a webserver to determine availability
+    tokio::join!(run_webserver(), run_bot());
+}
+
+async fn run_webserver() {
+    println!("Starting webserver...");
+    // Match any request and return hello world!
+    let routes = warp::any().map(|| "Hello, World!");
+
+    warp::serve(routes)
+        // ipv6 + ipv6 any addr
+        .run(([0, 0, 0, 0, 0, 0, 0, 0], 8080))
+        .await;
+}
+
+async fn run_bot() {
     println!("Starting bot...");
     let bot = Bot::from_env();
     let parameters =
