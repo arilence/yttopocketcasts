@@ -16,7 +16,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo install --offline --path .
 
 FROM docker.io/debian:bullseye-slim
-RUN apt-get install -y ca-certificates
+RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
+    apt-get install -y ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt-get clean
 RUN useradd -ms /bin/bash app
 USER app
 WORKDIR /app
