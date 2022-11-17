@@ -28,6 +28,8 @@ struct ConfigParameters {
 enum GeneralCommands {
     #[command(description = "shows intro message")]
     Start,
+    #[command(description = "returns user id")]
+    Id,
 }
 
 #[derive(BotCommands, Clone)]
@@ -93,6 +95,10 @@ async fn general_commands_handler(
     let text = match cmd {
         GeneralCommands::Start => {
             String::from("This bot downloads Youtube videos as audio files and uploads them to your personal Pocket Casts account.\n\nTo start: /auth [pocketcasts token]")
+        }
+        GeneralCommands::Id => {
+            let user_id = msg.from().unwrap().id;
+            format!("User Id: {}", user_id)
         }
     };
     bot.send_message(msg.chat.id, text).await?;
