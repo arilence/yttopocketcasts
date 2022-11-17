@@ -18,17 +18,20 @@ macro_rules! regex {
 struct ConfigParameters {
     // List of users allowed to use the bot
     // TODO: Store these values in a database?
-    command_allow_list: Vec<UserId>,
+    trusted_user_ids: Vec<UserId>,
 }
 
 // TODO: Setup bot_commands() and set_my_commands() to populate the bot's list of known commands
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase", description = "Bot Commands")]
-enum Commands {
-    #[command(description = "shows this message")]
-    Help,
+enum GeneralCommands {
     #[command(description = "shows intro message")]
     Start,
+}
+
+#[derive(BotCommands, Clone)]
+#[command(rename_rule = "lowercase", description = "Bot Commands")]
+enum TrustedCommands {
     #[command(description = "sets Pocket Casts auth token to upload files")]
     Auth(String),
 }
@@ -38,12 +41,26 @@ pub async fn run_bot() {
     let bot = Bot::from_env();
     let parameters =
         envy::from_env::<ConfigParameters>().expect("Failed to parse config parameters");
-    let handler = dptree::entry()
+
+    let handler = Update::filter_message()
         .branch(
-            Update::filter_message()
-                .filter_command::<Commands>()
-                .endpoint(commands_handler),
+            // Anyone can use the general commands
+            dptree::entry()
+                .filter_command::<GeneralCommands>()
+                .endpoint(general_commands_handler),
         )
+        .branch(
+            // Only user id's found in the Trusted List can use Trusted Commands
+            dptree::filter(|cfg: ConfigParameters, msg: Message| {
+                msg.from()
+                    .map(|user| cfg.trusted_user_ids.iter().any(|&i| i == user.id))
+                    .unwrap_or_default()
+            })
+            .filter_command::<TrustedCommands>()
+            .endpoint(trusted_commands_handler),
+        )
+        // Any message that isn't matched as a command goes here
+        // In most cases the message will be a youtube link
         .branch(Update::filter_message().endpoint(text_handler));
 
     Dispatcher::builder(bot, handler)
@@ -63,34 +80,38 @@ pub async fn run_bot() {
         .await;
 }
 
-async fn commands_handler(
-    cfg: ConfigParameters,
+async fn general_commands_handler(
+    _cfg: ConfigParameters,
     bot: Bot,
     _me: teloxide::types::Me,
     msg: Message,
-    cmd: Commands,
+    cmd: GeneralCommands,
 ) -> Result<(), teloxide::RequestError> {
     let text = match cmd {
-        Commands::Help => Commands::descriptions().to_string(),
-        Commands::Start => {
+        GeneralCommands::Start => {
             String::from("This bot downloads Youtube videos as audio files and uploads them to your personal Pocket Casts account.\n\nTo start: /auth [pocketcasts token]")
         }
-        Commands::Auth(token) => {
+    };
+    bot.send_message(msg.chat.id, text).await?;
+    Ok(())
+}
+
+async fn trusted_commands_handler(
+    _cfg: ConfigParameters,
+    bot: Bot,
+    _me: teloxide::types::Me,
+    msg: Message,
+    cmd: TrustedCommands,
+) -> Result<(), teloxide::RequestError> {
+    let text = match cmd {
+        TrustedCommands::Auth(token) => {
             let mut response = String::new();
-            // Only users in the allow list are able to authenticate themselves
-            let incoming_user_id = msg.from().unwrap().id;
-            if !cfg
-                .command_allow_list
-                .iter()
-                .any(|&i| i == incoming_user_id)
-            {
-                response.push_str("You are not authorized to use this command.");
-            }
             // TODO: Use dialogues instead of command arguments. User issues `/auth` and bot waits for a second message with the auth token.
-            else if token.is_empty() {
+            if token.is_empty() {
                 response.push_str("Invalid command, token not found.\n\nUsage: /auth [token]");
             } else {
-                let jwt_regex = regex!(r#"^([a-zA-Z0-9_=]+)\.([a-zA-Z0-9_=]+)\.([a-zA-Z0-9_\-\+/=]*)"#);
+                let jwt_regex =
+                    regex!(r#"^([a-zA-Z0-9_=]+)\.([a-zA-Z0-9_=]+)\.([a-zA-Z0-9_\-\+/=]*)"#);
                 if jwt_regex.is_match(&token) {
                     response.push_str("Token received. (But not really just yet)")
                 } else {
@@ -105,24 +126,10 @@ async fn commands_handler(
 }
 
 async fn text_handler(
-    cfg: ConfigParameters,
+    _cfg: ConfigParameters,
     bot: Bot,
     msg: Message,
 ) -> Result<(), teloxide::RequestError> {
-    // Only users in the allow list are able to authenticate themselves
-    let incoming_user_id = msg.from().unwrap().id;
-    if !cfg
-        .command_allow_list
-        .iter()
-        .any(|&i| i == incoming_user_id)
-    {
-        bot.send_message(
-            msg.chat.id,
-            String::from("You are not authorized to use this command."),
-        )
-        .await?;
-        return Ok(());
-    }
     // Dirty attempt at catching non-youtube links before sending them off to process
     let yt_regex = regex!(
         r#"(?:https?://)?(?:youtu\.be/|(?:www\.|m\.)?youtube\.com/(?:watch|v|embed)(?:\.php)?(?:\?.*v=|/))([a-zA-Z0-9_-]+)"#
