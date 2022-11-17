@@ -3,6 +3,8 @@ use std::vec;
 use serde::Deserialize;
 use teloxide::{prelude::*, utils::command::BotCommands};
 
+use crate::downloader;
+
 // From: https://docs.rs/once_cell/latest/once_cell/
 // As advised by rust-lang/regex: "Avoid compiling the same regex in a loop"
 macro_rules! regex {
@@ -19,6 +21,7 @@ struct ConfigParameters {
     command_allow_list: Vec<UserId>,
 }
 
+// TODO: Setup bot_commands() and set_my_commands() to populate the bot's list of known commands
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase", description = "Bot Commands")]
 enum Commands {
@@ -101,7 +104,25 @@ async fn commands_handler(
     Ok(())
 }
 
-async fn text_handler(bot: Bot, msg: Message) -> Result<(), teloxide::RequestError> {
+async fn text_handler(
+    cfg: ConfigParameters,
+    bot: Bot,
+    msg: Message,
+) -> Result<(), teloxide::RequestError> {
+    // Only users in the allow list are able to authenticate themselves
+    let incoming_user_id = msg.from().unwrap().id;
+    if !cfg
+        .command_allow_list
+        .iter()
+        .any(|&i| i == incoming_user_id)
+    {
+        bot.send_message(
+            msg.chat.id,
+            String::from("You are not authorized to use this command."),
+        )
+        .await?;
+        return Ok(());
+    }
     // Dirty attempt at catching non-youtube links before sending them off to process
     let yt_regex = regex!(
         r#"(?:https?://)?(?:youtu\.be/|(?:www\.|m\.)?youtube\.com/(?:watch|v|embed)(?:\.php)?(?:\?.*v=|/))([a-zA-Z0-9_-]+)"#
@@ -110,16 +131,27 @@ async fn text_handler(bot: Bot, msg: Message) -> Result<(), teloxide::RequestErr
         Some(val) => val,
         None => return Ok(()),
     };
-    if yt_regex.is_match(incoming_text) {
-        bot.send_message(msg.chat.id, String::from("Valid youtube link."))
-            .await?;
-    } else {
-        // TODO: Check if user has set their auth token before sending a link
+    if !yt_regex.is_match(incoming_text) {
         bot.send_message(
             msg.chat.id,
-            String::from("Please send a valid youtube link"),
+            String::from("Please send a valid youtube link."),
         )
         .await?;
+        return Ok(());
     }
+    // TODO: Check if user has set their auth token before sending a link
+    bot.send_message(
+        msg.chat.id,
+        String::from("Valid youtube link. Starting processing..."),
+    )
+    .await?;
+    let incoming_string = String::from(incoming_text);
+    tokio::spawn(async move {
+        // TODO: Implement a processing queue
+        downloader::download_audio(&incoming_string).await;
+        bot.send_message(msg.chat.id, String::from("Finished processing!"))
+            .await
+            .unwrap();
+    });
     Ok(())
 }

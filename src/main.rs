@@ -2,6 +2,7 @@ use dotenvy::dotenv;
 use warp::Filter;
 
 mod bot;
+mod downloader;
 
 #[tokio::main]
 async fn main() {
