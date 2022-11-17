@@ -5,13 +5,35 @@ use std::{
 
 use tokio::process::Command;
 
-pub async fn download_audio(url: &String) -> PathBuf {
-    let args = vec![
+pub async fn download_audio(url: &String) -> crate::Result<(String, PathBuf)> {
+    // Don't download yet, only get the title of video to use later
+    let dry_run_args = vec!["--simulate", "--print", "%(channel)s - %(title)s"];
+    let dry_run_output = run_yt_dlp(&url, dry_run_args).await;
+    if !dry_run_output.status.success() {
+        panic!("retrieving video title failed");
+    }
+    // The string from stdout has a newline at the end we don't want
+    let file_title = String::from_utf8(dry_run_output.stdout)?.replace("\n", "");
+
+    // Download the video using the video ID as the filename
+    let download_args = vec!["--no-simulate", "--print", "after_move:filepath"];
+    let download_output = run_yt_dlp(&url, download_args).await;
+    if !download_output.status.success() {
+        panic!("downloading video failed");
+    }
+    // The string from stdout has a newline at the end we don't want
+    let file_path_string = String::from_utf8(download_output.stdout)?.replace("\n", "");
+    let file_path = PathBuf::from(file_path_string);
+
+    Ok((file_title, file_path))
+}
+
+async fn run_yt_dlp(url: &String, custom_args: Vec<&str>) -> Output {
+    let yt_dlp_path = Path::new("yt-dlp");
+    let download_path = Path::new(".cache");
+    let default_args = vec![
         "--quiet",
         "--no-warnings",
-        "--print",
-        "after_move:filepath",
-        "--no-simulate",
         "--format",
         "bestaudio",
         "--extract-audio",
@@ -19,36 +41,22 @@ pub async fn download_audio(url: &String) -> PathBuf {
         "m4a",
         "--add-metadata",
         "--embed-thumbnail",
-        // NOTE: Keep special characters for now. This might change.
-        // "--restrict-filenames",
         "--output",
-        "%(channel)s - %(title)s.%(ext)s",
+        "%(id)s.%(ext)s",
     ];
-    let output = run_yt_dlp(&url, args).await;
-    if !output.status.success() {
-        panic!("yt-dlp failed");
-    }
-    let file_path = String::from_utf8(output.stdout).expect("Failed to parse stdout as Utf8");
-    // The string from stdout has a newline at the end we don't want part of the PathBuf
-    let path = PathBuf::from(file_path.replace("\n", ""));
-    return path;
-}
-
-async fn run_yt_dlp(url: &String, args: Vec<&str>) -> Output {
-    let yt_dlp_path = Path::new("yt-dlp");
-    let download_path = Path::new(".cache");
     let mut command = Command::new(yt_dlp_path);
     command
         .current_dir(download_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-
-    for arg in args.into_iter() {
+    for arg in default_args.into_iter() {
+        command.arg(arg);
+    }
+    for arg in custom_args.into_iter() {
         command.arg(arg);
     }
     // Make sure the source url is the last argument
     command.arg(url);
-
     let output = command
         .spawn()
         .expect("yt-dlp failed to start")

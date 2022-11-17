@@ -1,9 +1,9 @@
-use std::vec;
+use std::{env, vec};
 
 use serde::Deserialize;
 use teloxide::{prelude::*, utils::command::BotCommands};
 
-use crate::downloader;
+use crate::{downloader, uploader};
 
 // From: https://docs.rs/once_cell/latest/once_cell/
 // As advised by rust-lang/regex: "Avoid compiling the same regex in a loop"
@@ -148,8 +148,20 @@ async fn text_handler(
     let incoming_string = String::from(incoming_text);
     tokio::spawn(async move {
         // TODO: Implement a processing queue
-        downloader::download_audio(&incoming_string).await;
-        bot.send_message(msg.chat.id, String::from("Finished processing!"))
+        let file_info = downloader::download_audio(&incoming_string)
+            .await
+            .expect("yt-dlp failed to download file");
+        bot.send_message(
+            msg.chat.id,
+            String::from("Finished downloading. Now uploading..."),
+        )
+        .await
+        .unwrap();
+        let token: String = env::var("POCKETCASTS_TOKEN").expect("Pocket Casts token not set");
+        uploader::upload_audio(&token, &file_info.0, &file_info.1)
+            .await
+            .expect("Failed to upload file");
+        bot.send_message(msg.chat.id, String::from("Done!"))
             .await
             .unwrap();
     });
