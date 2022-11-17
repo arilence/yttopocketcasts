@@ -1,7 +1,8 @@
-use std::{env, vec};
+use std::{collections::HashMap, sync::Arc, vec};
 
 use serde::Deserialize;
 use teloxide::{prelude::*, utils::command::BotCommands};
+use tokio::sync::RwLock;
 
 use crate::{downloader, uploader};
 
@@ -41,6 +42,7 @@ pub async fn run_bot() {
     let bot = Bot::from_env();
     let parameters =
         envy::from_env::<ConfigParameters>().expect("Failed to parse config parameters");
+    let user_tokens: Arc<RwLock<HashMap<UserId, String>>> = Arc::new(RwLock::new(HashMap::new()));
 
     let handler = Update::filter_message()
         .branch(
@@ -64,7 +66,7 @@ pub async fn run_bot() {
         .branch(Update::filter_message().endpoint(text_handler));
 
     Dispatcher::builder(bot, handler)
-        .dependencies(dptree::deps![parameters])
+        .dependencies(dptree::deps![parameters, Arc::clone(&user_tokens)])
         // All message branches failed
         .default_handler(|_upd| async move {
             // println!("Unhandled update: {:?}", upd);
@@ -82,6 +84,7 @@ pub async fn run_bot() {
 
 async fn general_commands_handler(
     _cfg: ConfigParameters,
+    _user_tokens: Arc<RwLock<HashMap<UserId, String>>>,
     bot: Bot,
     _me: teloxide::types::Me,
     msg: Message,
@@ -98,6 +101,7 @@ async fn general_commands_handler(
 
 async fn trusted_commands_handler(
     _cfg: ConfigParameters,
+    user_tokens: Arc<RwLock<HashMap<UserId, String>>>,
     bot: Bot,
     _me: teloxide::types::Me,
     msg: Message,
@@ -113,6 +117,9 @@ async fn trusted_commands_handler(
                 let jwt_regex =
                     regex!(r#"^([a-zA-Z0-9_=]+)\.([a-zA-Z0-9_=]+)\.([a-zA-Z0-9_\-\+/=]*)"#);
                 if jwt_regex.is_match(&token) {
+                    let user_id = msg.from().unwrap().id;
+                    let mut tokens = user_tokens.write().await;
+                    tokens.insert(user_id, token);
                     response.push_str("Token received. (But not really just yet)")
                 } else {
                     response.push_str("Token is not a valid JWT.\n\nUsage: /auth [token]")
@@ -127,6 +134,7 @@ async fn trusted_commands_handler(
 
 async fn text_handler(
     _cfg: ConfigParameters,
+    user_tokens: Arc<RwLock<HashMap<UserId, String>>>,
     bot: Bot,
     msg: Message,
 ) -> Result<(), teloxide::RequestError> {
@@ -146,7 +154,22 @@ async fn text_handler(
         .await?;
         return Ok(());
     }
-    // TODO: Check if user has set their auth token before sending a link
+    // Check if user has set their auth token before sending a link
+    let user_id = msg.from().unwrap().id;
+    let tokens = user_tokens.read().await;
+    let token = match tokens.get(&user_id) {
+        Some(val) => val.clone(),
+        None => {
+            bot.send_message(
+                msg.chat.id,
+                String::from(
+                    "Please set an auth token before sending videos\n\nUse: /auth [token]",
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
     bot.send_message(
         msg.chat.id,
         String::from("Valid youtube link. Starting processing..."),
@@ -164,7 +187,6 @@ async fn text_handler(
         )
         .await
         .unwrap();
-        let token: String = env::var("POCKETCASTS_TOKEN").expect("Pocket Casts token not set");
         uploader::upload_audio(&token, &file_info.0, &file_info.1)
             .await
             .expect("Failed to upload file");
