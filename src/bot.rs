@@ -1,8 +1,8 @@
-use std::{collections::HashMap, sync::Arc, vec};
+use std::{collections::HashMap, path::Path, sync::Arc, vec};
 
 use serde::Deserialize;
 use teloxide::{prelude::*, utils::command::BotCommands};
-use tokio::sync::RwLock;
+use tokio::{fs, sync::RwLock};
 
 use crate::{downloader, uploader};
 
@@ -17,9 +17,11 @@ macro_rules! regex {
 
 #[derive(Clone, Deserialize)]
 struct ConfigParameters {
-    // List of users allowed to use the bot
     // TODO: Store these values in a database?
+    // List of users allowed to use the bot
     trusted_user_ids: Vec<UserId>,
+    // List of users who are Admins
+    admin_user_ids: Vec<UserId>,
 }
 
 // TODO: Setup bot_commands() and set_my_commands() to populate the bot's list of known commands
@@ -41,6 +43,14 @@ enum TrustedCommands {
     Clear,
 }
 
+#[derive(BotCommands, Clone)]
+#[command(rename_rule = "lowercase", description = "Bot Commands")]
+enum AdminCommands {
+    // NOTE: This deletes all files without waiting for other processes to finish
+    #[command(description = "deletes all cached files")]
+    DeleteCache,
+}
+
 pub async fn run_bot() {
     println!("Starting bot...");
     let bot = Bot::from_env();
@@ -56,17 +66,31 @@ pub async fn run_bot() {
                 .endpoint(general_commands_handler),
         )
         .branch(
-            // Only user id's found in the Trusted List can use Trusted Commands
+            // Only user's in the Trusted List or Admin List can use Trusted Commands
             dptree::filter(|cfg: ConfigParameters, msg: Message| {
                 msg.from()
-                    .map(|user| cfg.trusted_user_ids.iter().any(|&i| i == user.id))
+                    .map(|user| {
+                        cfg.trusted_user_ids.iter().any(|&i| i == user.id)
+                            || cfg.admin_user_ids.iter().any(|&i| i == user.id)
+                    })
                     .unwrap_or_default()
             })
             .filter_command::<TrustedCommands>()
             .endpoint(trusted_commands_handler),
         )
+        .branch(
+            // Only user's found in the Admin List can use Admin Commands
+            dptree::filter(|cfg: ConfigParameters, msg: Message| {
+                msg.from()
+                    .map(|user| cfg.admin_user_ids.iter().any(|&i| i == user.id))
+                    .unwrap_or_default()
+            })
+            .filter_command::<AdminCommands>()
+            .endpoint(admin_commands_handler),
+        )
         // Any message that isn't matched as a command goes here
         // In most cases the message will be a youtube link
+        // TODO: Limit this case to only limited and admin users
         .branch(Update::filter_message().endpoint(text_handler));
 
     Dispatcher::builder(bot, handler)
@@ -149,6 +173,33 @@ async fn command_clear(msg: &Message, user_tokens: Arc<RwLock<HashMap<UserId, St
         Some(_) => String::from("Token removed."),
         None => String::from("No token found associated with your user id."),
     }
+}
+
+async fn admin_commands_handler(
+    _cfg: ConfigParameters,
+    _user_tokens: Arc<RwLock<HashMap<UserId, String>>>,
+    bot: Bot,
+    _me: teloxide::types::Me,
+    msg: Message,
+    cmd: AdminCommands,
+) -> Result<(), teloxide::RequestError> {
+    let text = match cmd {
+        AdminCommands::DeleteCache => {
+            let path = Path::new(".cache/");
+            let mut reader = fs::read_dir(path).await?;
+            while let Ok(entry) = reader.next_entry().await {
+                match entry {
+                    Some(val) => {
+                        fs::remove_file(val.path()).await?;
+                    }
+                    None => break,
+                }
+            }
+            String::from("Cleared .cache folder")
+        }
+    };
+    bot.send_message(msg.chat.id, text).await?;
+    Ok(())
 }
 
 async fn text_handler(
