@@ -37,6 +37,8 @@ enum GeneralCommands {
 enum TrustedCommands {
     #[command(description = "sets Pocket Casts auth token to upload files")]
     Auth(String),
+    #[command(description = "removes associated auth token")]
+    Clear,
 }
 
 pub async fn run_bot() {
@@ -94,7 +96,7 @@ async fn general_commands_handler(
 ) -> Result<(), teloxide::RequestError> {
     let text = match cmd {
         GeneralCommands::Start => {
-            String::from("This bot downloads Youtube videos as audio files and uploads them to your personal Pocket Casts account.\n\nTo start: /auth [pocketcasts token]")
+            String::from("This bot downloads Youtube videos as audio files and uploads them to your personal Pocket Casts account.\n\nTo get user id: /id\n\nTo start: /auth [pocketcasts token]")
         }
         GeneralCommands::Id => {
             let user_id = msg.from().unwrap().id;
@@ -114,51 +116,65 @@ async fn trusted_commands_handler(
     cmd: TrustedCommands,
 ) -> Result<(), teloxide::RequestError> {
     let text = match cmd {
-        TrustedCommands::Auth(token) => {
-            let mut response = String::new();
-            // TODO: Use dialogues instead of command arguments. User issues `/auth` and bot waits for a second message with the auth token.
-            if token.is_empty() {
-                response.push_str("Invalid command, token not found.\n\nUsage: /auth [token]");
-            } else {
-                let jwt_regex =
-                    regex!(r#"^([a-zA-Z0-9_=]+)\.([a-zA-Z0-9_=]+)\.([a-zA-Z0-9_\-\+/=]*)"#);
-                if jwt_regex.is_match(&token) {
-                    let user_id = msg.from().unwrap().id;
-                    let mut tokens = user_tokens.write().await;
-                    tokens.insert(user_id, token);
-                    response.push_str("Token received. (But not really just yet)")
-                } else {
-                    response.push_str("Token is not a valid JWT.\n\nUsage: /auth [token]")
-                }
-            }
-            response
-        }
+        TrustedCommands::Auth(token) => command_auth(&msg, user_tokens, token).await,
+        TrustedCommands::Clear => command_clear(&msg, user_tokens).await,
     };
     bot.send_message(msg.chat.id, text).await?;
     Ok(())
 }
 
+async fn command_auth(
+    msg: &Message,
+    user_tokens: Arc<RwLock<HashMap<UserId, String>>>,
+    token: String,
+) -> String {
+    // TODO: Use dialogues instead of command arguments. User issues `/auth` and bot waits for a second message with the auth token.
+    if token.is_empty() {
+        return String::from("Please provide a token.\n\nUsage: /auth [token]");
+    }
+    let jwt_regex = regex!(r#"^([a-zA-Z0-9_=]+)\.([a-zA-Z0-9_=]+)\.([a-zA-Z0-9_\-\+/=]*)"#);
+    if !jwt_regex.is_match(&token) {
+        return String::from("Token doesn't seem to be a valid JWT.\n\nUsage: /auth [token]");
+    }
+    let user_id = msg.from().unwrap().id;
+    let mut tokens = user_tokens.write().await;
+    tokens.insert(user_id, token);
+    String::from("Token set.\n\nStart sending me some youtube videos.")
+}
+
+async fn command_clear(msg: &Message, user_tokens: Arc<RwLock<HashMap<UserId, String>>>) -> String {
+    let user_id = msg.from().unwrap().id;
+    let mut tokens = user_tokens.write().await;
+    match tokens.remove(&user_id) {
+        Some(_) => String::from("Token removed."),
+        None => String::from("No token found associated with your user id."),
+    }
+}
+
 async fn text_handler(
-    _cfg: ConfigParameters,
+    cfg: ConfigParameters,
     user_tokens: Arc<RwLock<HashMap<UserId, String>>>,
     bot: Bot,
     msg: Message,
 ) -> Result<(), teloxide::RequestError> {
+    let text = command_catch_all(cfg, user_tokens, bot.clone(), msg.clone()).await;
+    bot.send_message(msg.chat.id, text).await?;
+    Ok(())
+}
+
+async fn command_catch_all(
+    _cfg: ConfigParameters,
+    user_tokens: Arc<RwLock<HashMap<UserId, String>>>,
+    bot: Bot,
+    msg: Message,
+) -> String {
+    let incoming_text = msg.text().unwrap_or_default();
     // Dirty attempt at catching non-youtube links before sending them off to process
     let yt_regex = regex!(
         r#"(?:https?://)?(?:youtu\.be/|(?:www\.|m\.)?youtube\.com/(?:watch|v|embed)(?:\.php)?(?:\?.*v=|/))([a-zA-Z0-9_-]+)"#
     );
-    let incoming_text = match msg.text() {
-        Some(val) => val,
-        None => return Ok(()),
-    };
     if !yt_regex.is_match(incoming_text) {
-        bot.send_message(
-            msg.chat.id,
-            String::from("Please send a valid youtube link."),
-        )
-        .await?;
-        return Ok(());
+        return String::from("Please send a valid youtube link.");
     }
     // Check if user has set their auth token before sending a link
     let user_id = msg.from().unwrap().id;
@@ -166,33 +182,18 @@ async fn text_handler(
     let token = match tokens.get(&user_id) {
         Some(val) => val.clone(),
         None => {
-            bot.send_message(
-                msg.chat.id,
-                String::from(
-                    "Please set an auth token before sending videos\n\nUse: /auth [token]",
-                ),
-            )
-            .await?;
-            return Ok(());
+            return String::from("Please set a token before sending videos\n\nUse: /auth [token]");
         }
     };
-    bot.send_message(
-        msg.chat.id,
-        String::from("Valid youtube link. Starting processing..."),
-    )
-    .await?;
-    let incoming_string = String::from(incoming_text);
+    let url_string = String::from(incoming_text);
     tokio::spawn(async move {
         // TODO: Implement a processing queue
-        let file_info = downloader::download_audio(&incoming_string)
+        let file_info = downloader::download_audio(&url_string)
             .await
             .expect("yt-dlp failed to download file");
-        bot.send_message(
-            msg.chat.id,
-            String::from("Finished downloading. Now uploading..."),
-        )
-        .await
-        .unwrap();
+        bot.send_message(msg.chat.id, String::from("Download finished. Uploading..."))
+            .await
+            .unwrap();
         uploader::upload_audio(&token, &file_info.0, &file_info.1)
             .await
             .expect("Failed to upload file");
@@ -200,5 +201,5 @@ async fn text_handler(
             .await
             .unwrap();
     });
-    Ok(())
+    String::from("Valid youtube link. Downloading...")
 }
