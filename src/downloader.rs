@@ -10,7 +10,10 @@ pub async fn download_audio(url: &String) -> crate::Result<(String, PathBuf)> {
     let dry_run_args = vec!["--simulate", "--print", "%(channel)s - %(title)s"];
     let dry_run_output = run_yt_dlp(&url, dry_run_args).await;
     if !dry_run_output.status.success() {
-        panic!("retrieving video title failed");
+        panic!(
+            "retrieving video title failed:\nstdout: {:?}\nstderr: {:?}",
+            dry_run_output.stdout, dry_run_output.stderr
+        );
     }
     // The string from stdout has a newline at the end we don't want
     let file_title = String::from_utf8(dry_run_output.stdout)?.replace("\n", "");
@@ -19,7 +22,10 @@ pub async fn download_audio(url: &String) -> crate::Result<(String, PathBuf)> {
     let download_args = vec!["--no-simulate", "--print", "after_move:filepath"];
     let download_output = run_yt_dlp(&url, download_args).await;
     if !download_output.status.success() {
-        panic!("downloading video failed");
+        panic!(
+            "downloading video failed:\nstdout: {:?}\nstderr: {:?}",
+            download_output.stdout, download_output.stderr
+        );
     }
     // The string from stdout has a newline at the end we don't want
     let file_path_string = String::from_utf8(download_output.stdout)?.replace("\n", "");
