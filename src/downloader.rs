@@ -41,6 +41,7 @@ async fn run_yt_dlp(url: &String, custom_args: Vec<&str>) -> Output {
     let download_path = Path::new(".cache");
     let default_args = vec![
         "--quiet",
+        "--verbose",
         "--no-warnings",
         "--format",
         "bestaudio",
