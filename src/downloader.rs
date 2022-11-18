@@ -11,8 +11,9 @@ pub async fn download_audio(url: &String) -> crate::Result<(String, PathBuf)> {
     let dry_run_output = run_yt_dlp(&url, dry_run_args).await;
     if !dry_run_output.status.success() {
         panic!(
-            "retrieving video title failed:\nstdout: {:?}\nstderr: {:?}",
-            dry_run_output.stdout, dry_run_output.stderr
+            "retrieving video title failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8(dry_run_output.stdout)?,
+            String::from_utf8(dry_run_output.stderr)?
         );
     }
     // The string from stdout has a newline at the end we don't want
@@ -23,8 +24,9 @@ pub async fn download_audio(url: &String) -> crate::Result<(String, PathBuf)> {
     let download_output = run_yt_dlp(&url, download_args).await;
     if !download_output.status.success() {
         panic!(
-            "downloading video failed:\nstdout: {:?}\nstderr: {:?}",
-            download_output.stdout, download_output.stderr
+            "downloading video failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8(download_output.stdout)?,
+            String::from_utf8(download_output.stderr)?
         );
     }
     // The string from stdout has a newline at the end we don't want
