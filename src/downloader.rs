@@ -20,7 +20,12 @@ pub async fn download_audio(url: &String) -> crate::Result<(String, PathBuf)> {
     let file_title = String::from_utf8(dry_run_output.stdout)?.replace("\n", "");
 
     // Download the video using the video ID as the filename
-    let download_args = vec!["--no-simulate", "--print", "after_move:filepath"];
+    let download_args = vec![
+        "--no-simulate",
+        "--verbose",
+        "--print",
+        "after_move:filepath",
+    ];
     let download_output = run_yt_dlp(&url, download_args).await;
     if !download_output.status.success() {
         panic!(
@@ -41,7 +46,6 @@ async fn run_yt_dlp(url: &String, custom_args: Vec<&str>) -> Output {
     let download_path = Path::new(".cache");
     let default_args = vec![
         "--quiet",
-        "--verbose",
         "--no-warnings",
         "--format",
         "bestaudio",
@@ -49,7 +53,7 @@ async fn run_yt_dlp(url: &String, custom_args: Vec<&str>) -> Output {
         "--audio-format",
         "m4a",
         "--add-metadata",
-        "--embed-thumbnail",
+        //"--embed-thumbnail",
         "--output",
         "%(id)s.%(ext)s",
     ];
