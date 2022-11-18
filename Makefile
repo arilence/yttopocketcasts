@@ -1,3 +1,6 @@
+#!make
+-include .env
+
 APPLICATION_NAME ?= yttopocketcasts
 
 run:
@@ -11,7 +14,12 @@ _builder:
 		docker build --tag ${APPLICATION_NAME} .
 
 _runner:
-		docker run --rm --name ${APPLICATION_NAME} ${APPLICATION_NAME}
+		@docker run --rm \
+        --name ${APPLICATION_NAME} \
+        --env TELOXIDE_TOKEN="${TELOXIDE_TOKEN}" \
+        --env TRUSTED_USER_IDS="${TRUSTED_USER_IDS}" \
+        --env ADMIN_USER_IDS="${ADMIN_USER_IDS}" \
+        ${APPLICATION_NAME}
 
 _stopper:
 		docker stop --time 1 ${APPLICATION_NAME}

@@ -53,6 +53,7 @@ async fn run_yt_dlp(url: &String, custom_args: Vec<&str>) -> Output {
         "--audio-format",
         "m4a",
         "--add-metadata",
+        // TODO: Figure out why this works in local container and fails in fly.io container
         //"--embed-thumbnail",
         "--output",
         "%(id)s.%(ext)s",

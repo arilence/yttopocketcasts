@@ -15,12 +15,19 @@ macro_rules! regex {
     }};
 }
 
+// Prevents serde from panicking when trying to parse env vars that don't exist
+fn default_user_ids() -> Vec<UserId> {
+    Vec::new()
+}
+
 #[derive(Clone, Deserialize)]
 struct ConfigParameters {
     // TODO: Store these values in a database?
     // List of users allowed to use the bot
+    #[serde(default = "default_user_ids")]
     trusted_user_ids: Vec<UserId>,
-    // List of users who are Admins
+    // List of users who are allowed to use Admin commands
+    #[serde(default = "default_user_ids")]
     admin_user_ids: Vec<UserId>,
 }
 
@@ -120,7 +127,7 @@ async fn general_commands_handler(
 ) -> Result<(), teloxide::RequestError> {
     let text = match cmd {
         GeneralCommands::Start => {
-            String::from("This bot downloads Youtube videos as audio files and uploads them to your personal Pocket Casts account.\n\nTo get user id: /id\n\nTo start: /auth [pocketcasts token]")
+            String::from("This bot sends Youtube videos as audio podcasts to your personal Pocket Casts files section.\n\nTo get user id: /id\n\nTo start: /auth [pocketcasts token]")
         }
         GeneralCommands::Id => {
             let user_id = msg.from().unwrap().id;
