@@ -34,7 +34,6 @@ USER app
 WORKDIR /app
 RUN mkdir .cache
 COPY --from=builder /usr/local/cargo/bin/yttopocketcasts /app/botapp
-COPY .env ./.env
 
 # No CMD or ENTRYPOINT, see fly.toml with `cmd` override.
 CMD ["/app/botapp"]
