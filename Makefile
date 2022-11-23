@@ -14,7 +14,7 @@ _builder:
 		docker build --tag ${APPLICATION_NAME} .
 
 _runner:
-		@docker run --rm \
+		@docker run --rm -it \
         --name ${APPLICATION_NAME} \
         --env TELOXIDE_TOKEN="${TELOXIDE_TOKEN}" \
         --env TRUSTED_USER_IDS="${TRUSTED_USER_IDS}" \
@@ -22,4 +22,4 @@ _runner:
         ${APPLICATION_NAME}
 
 _stopper:
-		docker stop --time 1 ${APPLICATION_NAME}
+		docker stop ${APPLICATION_NAME}
