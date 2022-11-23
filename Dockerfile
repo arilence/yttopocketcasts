@@ -1,6 +1,4 @@
 FROM docker.io/rust:1.65.0-bullseye as builder
-# Create dummy rust project so we can cache crate dependencies in Docker
-RUN USER=root cargo new app
 WORKDIR /usr/src/app
 COPY Cargo.toml ./Cargo.toml
 COPY Cargo.lock ./Cargo.lock
