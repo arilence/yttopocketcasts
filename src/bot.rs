@@ -4,7 +4,7 @@ use serde::Deserialize;
 use teloxide::{prelude::*, utils::command::BotCommands};
 use tokio::{fs, sync::RwLock};
 
-use crate::{downloader, uploader};
+use crate::{downloader, filters, uploader};
 
 // From: https://docs.rs/once_cell/latest/once_cell/
 // As advised by rust-lang/regex: "Avoid compiling the same regex in a loop"
@@ -21,14 +21,14 @@ fn default_user_ids() -> Vec<UserId> {
 }
 
 #[derive(Clone, Deserialize)]
-struct ConfigParameters {
+pub struct ConfigParameters {
     // TODO: Store these values in a database?
     // List of users allowed to use the bot
     #[serde(default = "default_user_ids")]
-    trusted_user_ids: Vec<UserId>,
+    pub trusted_user_ids: Vec<UserId>,
     // List of users who are allowed to use Admin commands
     #[serde(default = "default_user_ids")]
-    admin_user_ids: Vec<UserId>,
+    pub admin_user_ids: Vec<UserId>,
 }
 
 // TODO: Setup bot_commands() and set_my_commands() to populate the bot's list of known commands
@@ -66,39 +66,38 @@ pub async fn run_bot() {
     let user_tokens: Arc<RwLock<HashMap<UserId, String>>> = Arc::new(RwLock::new(HashMap::new()));
 
     let handler = Update::filter_message()
+        // General commands: Anyone can use these commands
         .branch(
-            // Anyone can use the general commands
             dptree::entry()
                 .filter_command::<GeneralCommands>()
-                .endpoint(general_commands_handler),
+                .endpoint(handle_general_commands),
         )
+        // Trusted commands: both trusted and admin users can use these
         .branch(
-            // Only user's in the Trusted List or Admin List can use Trusted Commands
-            dptree::filter(|cfg: ConfigParameters, msg: Message| {
-                msg.from()
-                    .map(|user| {
-                        cfg.trusted_user_ids.iter().any(|&i| i == user.id)
-                            || cfg.admin_user_ids.iter().any(|&i| i == user.id)
-                    })
-                    .unwrap_or_default()
-            })
-            .filter_command::<TrustedCommands>()
-            .endpoint(trusted_commands_handler),
+            dptree::entry()
+                .filter_command::<TrustedCommands>()
+                .branch(dptree::filter_async(filters::is_trusted).endpoint(handle_trusted_commands))
+                .endpoint(handle_unauthorized_message),
         )
+        // Admin commands: only admin users can use these
+        // These commands are hidden to all non-admin users and appear as "Unknown command"
         .branch(
-            // Only user's found in the Admin List can use Admin Commands
-            dptree::filter(|cfg: ConfigParameters, msg: Message| {
-                msg.from()
-                    .map(|user| cfg.admin_user_ids.iter().any(|&i| i == user.id))
-                    .unwrap_or_default()
-            })
-            .filter_command::<AdminCommands>()
-            .endpoint(admin_commands_handler),
+            dptree::entry()
+                .filter_command::<AdminCommands>()
+                .branch(dptree::filter_async(filters::is_admin).endpoint(handle_admin_commands))
+                .endpoint(handle_unrecognized_messages),
         )
-        // Any message that isn't matched as a command goes here
-        // In most cases the message will be a youtube link
-        // TODO: Limit this case to only limited and admin users
-        .branch(Update::filter_message().endpoint(text_handler));
+        // Match non-command messages such as Youtube links
+        // Limited to trusted and admin users
+        .branch(
+            Update::filter_message().branch(
+                dptree::filter_async(filters::is_trusted)
+                    .filter_async(filters::is_link)
+                    .endpoint(handle_link_messages),
+            ),
+        )
+        // Unrecognized text
+        .branch(Update::filter_message().endpoint(handle_unrecognized_messages));
 
     Dispatcher::builder(bot, handler)
         .dependencies(dptree::deps![parameters, Arc::clone(&user_tokens)])
@@ -117,7 +116,7 @@ pub async fn run_bot() {
         .await;
 }
 
-async fn general_commands_handler(
+async fn handle_general_commands(
     _cfg: ConfigParameters,
     _user_tokens: Arc<RwLock<HashMap<UserId, String>>>,
     bot: Bot,
@@ -138,7 +137,7 @@ async fn general_commands_handler(
     Ok(())
 }
 
-async fn trusted_commands_handler(
+async fn handle_trusted_commands(
     _cfg: ConfigParameters,
     user_tokens: Arc<RwLock<HashMap<UserId, String>>>,
     bot: Bot,
@@ -150,6 +149,69 @@ async fn trusted_commands_handler(
         TrustedCommands::Auth(token) => command_auth(&msg, user_tokens, token).await,
         TrustedCommands::Clear => command_clear(&msg, user_tokens).await,
     };
+    bot.send_message(msg.chat.id, text).await?;
+    Ok(())
+}
+
+async fn handle_admin_commands(
+    _cfg: ConfigParameters,
+    _user_tokens: Arc<RwLock<HashMap<UserId, String>>>,
+    bot: Bot,
+    _me: teloxide::types::Me,
+    msg: Message,
+    cmd: AdminCommands,
+) -> Result<(), teloxide::RequestError> {
+    let text = match cmd {
+        AdminCommands::DeleteCache => {
+            let path = Path::new(".cache/");
+            let mut reader = fs::read_dir(path).await?;
+            while let Ok(entry) = reader.next_entry().await {
+                match entry {
+                    Some(val) => {
+                        fs::remove_file(val.path()).await?;
+                    }
+                    None => break,
+                }
+            }
+            String::from("Cleared .cache folder")
+        }
+    };
+    bot.send_message(msg.chat.id, text).await?;
+    Ok(())
+}
+
+async fn handle_link_messages(
+    cfg: ConfigParameters,
+    user_tokens: Arc<RwLock<HashMap<UserId, String>>>,
+    bot: Bot,
+    _me: teloxide::types::Me,
+    msg: Message,
+) -> Result<(), teloxide::RequestError> {
+    let text = command_link(cfg, user_tokens, bot.clone(), msg.clone()).await;
+    bot.send_message(msg.chat.id, text).await?;
+    Ok(())
+}
+
+async fn handle_unrecognized_messages(
+    _cfg: ConfigParameters,
+    _user_tokens: Arc<RwLock<HashMap<UserId, String>>>,
+    bot: Bot,
+    _me: teloxide::types::Me,
+    msg: Message,
+) -> Result<(), teloxide::RequestError> {
+    let text = String::from("Command not found.\n\nUse /start");
+    bot.send_message(msg.chat.id, text).await?;
+    Ok(())
+}
+
+async fn handle_unauthorized_message(
+    _cfg: ConfigParameters,
+    _user_tokens: Arc<RwLock<HashMap<UserId, String>>>,
+    bot: Bot,
+    _me: teloxide::types::Me,
+    msg: Message,
+) -> Result<(), teloxide::RequestError> {
+    let text = String::from("You are not authorized to use this command.\n\nUse /start");
     bot.send_message(msg.chat.id, text).await?;
     Ok(())
 }
@@ -182,45 +244,7 @@ async fn command_clear(msg: &Message, user_tokens: Arc<RwLock<HashMap<UserId, St
     }
 }
 
-async fn admin_commands_handler(
-    _cfg: ConfigParameters,
-    _user_tokens: Arc<RwLock<HashMap<UserId, String>>>,
-    bot: Bot,
-    _me: teloxide::types::Me,
-    msg: Message,
-    cmd: AdminCommands,
-) -> Result<(), teloxide::RequestError> {
-    let text = match cmd {
-        AdminCommands::DeleteCache => {
-            let path = Path::new(".cache/");
-            let mut reader = fs::read_dir(path).await?;
-            while let Ok(entry) = reader.next_entry().await {
-                match entry {
-                    Some(val) => {
-                        fs::remove_file(val.path()).await?;
-                    }
-                    None => break,
-                }
-            }
-            String::from("Cleared .cache folder")
-        }
-    };
-    bot.send_message(msg.chat.id, text).await?;
-    Ok(())
-}
-
-async fn text_handler(
-    cfg: ConfigParameters,
-    user_tokens: Arc<RwLock<HashMap<UserId, String>>>,
-    bot: Bot,
-    msg: Message,
-) -> Result<(), teloxide::RequestError> {
-    let text = command_catch_all(cfg, user_tokens, bot.clone(), msg.clone()).await;
-    bot.send_message(msg.chat.id, text).await?;
-    Ok(())
-}
-
-async fn command_catch_all(
+async fn command_link(
     _cfg: ConfigParameters,
     user_tokens: Arc<RwLock<HashMap<UserId, String>>>,
     bot: Bot,
@@ -248,8 +272,8 @@ async fn command_catch_all(
         // TODO: Implement a processing queue
         let file_info = downloader::download_audio(&url_string)
             .await
-            .expect("yt-dlp failed to download file");
-        bot.send_message(msg.chat.id, String::from("Download finished. Uploading..."))
+            .expect("Failed to download file");
+        bot.send_message(msg.chat.id, String::from("Uploading..."))
             .await
             .unwrap();
         uploader::upload_audio(&token, &file_info.0, &file_info.1)
@@ -259,5 +283,5 @@ async fn command_catch_all(
             .await
             .unwrap();
     });
-    String::from("Valid youtube link. Downloading...")
+    String::from("Downloading...")
 }

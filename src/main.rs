@@ -3,6 +3,7 @@ use warp::Filter;
 
 mod bot;
 mod downloader;
+mod filters;
 mod uploader;
 
 // TODO: Implement actual error types
