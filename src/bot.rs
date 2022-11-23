@@ -35,26 +35,28 @@ pub struct ConfigParameters {
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase", description = "Bot Commands")]
 enum GeneralCommands {
-    #[command(description = "shows intro message")]
+    #[command(description = "show intro message")]
     Start,
-    #[command(description = "returns user id")]
+    #[command(description = "get user id")]
     Id,
 }
 
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase", description = "Bot Commands")]
 enum TrustedCommands {
-    #[command(description = "sets Pocket Casts auth token to upload files")]
+    #[command(description = "set Pocket Casts auth token")]
     Auth(String),
-    #[command(description = "removes associated auth token")]
+    #[command(description = "unset auth token")]
     Clear,
 }
 
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase", description = "Bot Commands")]
 enum AdminCommands {
+    #[command(description = "update list of bot commands on Telegram")]
+    SetCommands,
     // NOTE: This deletes all files without waiting for other processes to finish
-    #[command(description = "deletes all cached files")]
+    #[command(description = "delete all cached files")]
     DeleteCache,
 }
 
@@ -162,6 +164,15 @@ async fn handle_admin_commands(
     cmd: AdminCommands,
 ) -> Result<(), teloxide::RequestError> {
     let text = match cmd {
+        AdminCommands::SetCommands => {
+            let commands = [
+                GeneralCommands::bot_commands().as_slice(),
+                TrustedCommands::bot_commands().as_slice(),
+            ]
+            .concat();
+            bot.set_my_commands(commands).await?;
+            String::from("Commands updated")
+        }
         AdminCommands::DeleteCache => {
             let path = Path::new(".cache/");
             let mut reader = fs::read_dir(path).await?;
