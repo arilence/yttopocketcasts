@@ -16,16 +16,9 @@ async fn main() {
     dotenv().ok();
 
     // Fly.io requires a webserver to determine availability
-    let webserver = run_webserver();
-    let bot = bot::run_bot();
-    tokio::select! {
-        _ = webserver => {
-            println!("Web server stopped")
-        }
-        _ = bot => {
-            println!("Bot stopped")
-        }
-    }
+    tokio::spawn(run_webserver());
+
+    bot::run_bot().await;
 }
 
 async fn run_webserver() {
