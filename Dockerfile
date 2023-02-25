@@ -1,4 +1,4 @@
-FROM docker.io/rust:1.65.0-bullseye as builder
+FROM docker.io/rust:1.67.1-bullseye as builder
 WORKDIR /usr/src/app
 COPY Cargo.toml ./Cargo.toml
 COPY Cargo.lock ./Cargo.lock
