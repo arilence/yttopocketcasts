@@ -18,33 +18,40 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
     apt-get install -y curl && \
     rm -rf /var/lib/apt/lists/* && \
     apt-get clean
-RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/download/2022.11.11/yt-dlp -o /usr/local/bin/yt-dlp
+RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/download/2023.02.17/yt-dlp -o /usr/local/bin/yt-dlp
 RUN chmod +x /usr/local/bin/yt-dlp
 
-FROM docker.io/debian:bullseye-slim as base
+FROM builder as development
 RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
-    apt-get install -y ca-certificates python3 ffmpeg && \
+    apt-get install -y \
+        ca-certificates \
+        python3 \
+        ffmpeg \
+        libssl-dev \
+        pkg-config \
+        gcc \
+        libc6-dev \
+        git \
+        && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt-get clean
+RUN rustup component add rustfmt
+COPY --from=yt-dlp /usr/local/bin/yt-dlp /usr/local/bin/yt-dlp
+WORKDIR /app
+RUN mkdir .cache
+
+FROM docker.io/debian:bullseye-slim
+RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
+    apt-get install -y \
+        ca-certificates \
+        python3 \
+        ffmpeg \
+        && \
     rm -rf /var/lib/apt/lists/* && \
     apt-get clean
 COPY --from=yt-dlp /usr/local/bin/yt-dlp /usr/local/bin/yt-dlp
 WORKDIR /app
 RUN mkdir .cache
-
-FROM base as development
-RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
-    apt-get install -y libssl-dev pkg-config gcc libc6-dev git && \
-    rm -rf /var/lib/apt/lists/* && \
-    apt-get clean
-ENV RUSTUP_HOME=/usr/local/rustup \
-    CARGO_HOME=/usr/local/cargo \
-    PATH=/usr/local/cargo/bin:$PATH
-COPY --from=builder /usr/local/cargo/bin/rustup /usr/local/cargo/bin/rustup
-COPY --from=builder /usr/local/cargo/bin/cargo /usr/local/cargo/bin/cargo
-COPY --from=builder /usr/local/cargo/bin/rustc /usr/local/cargo/bin/rustc
-RUN rustup default stable
-
-# Production build
-FROM base
 RUN useradd -ms /bin/bash app
 USER app
 COPY --from=builder /usr/local/cargo/bin/yttopocketcasts /app/botapp
