@@ -1,5 +1,4 @@
 version: "3.7"
-
 x-environment: &default-environment
     TEMP: TEMP
 services:
@@ -10,21 +9,19 @@ services:
             target: "development"
         environment:
             <<: *default-environment
-            NODE_ENV: development
+            TEMP: TEST
         volumes:
             - ./:/app
-            - /app/target/
-            - /app/.cache/
         command: sleep infinity
     redis:
-        image: redis/redis-stack-server:6.2.6-v4
+        image: redis/redis-stack:6.2.6-v4
         restart: unless-stopped
         environment:
             <<: *default-environment
             TEMP: HELLO
         ports:
-            - 10001:6379
-            - 13333:8001
+            - 6379:6379
+            - 8001:8001
         # Uncomment if you want redis to persist between container rebuilds
         # volumes:
         #   - ./redis-data:/data
