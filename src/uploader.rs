@@ -9,23 +9,21 @@ use serde_json::{json, Value};
 use tokio::fs::{metadata, File};
 use tokio_util::codec::{BytesCodec, FramedRead};
 
+use crate::types::{BotError, BotResult};
+
 pub async fn upload_audio(
     token: &String,
     file_title: &String,
     file_path: &PathBuf,
-) -> crate::Result<()> {
+) -> BotResult<()> {
     let file_size = metadata(file_path).await?.len();
     // Pocket Casts API returns a S3 url to push the audio file to
-    let upload_url = request_upload(token, file_title, file_size)
-        .await
-        .expect("Failed to request upload");
-    send_file(upload_url, file_path, file_size)
-        .await
-        .expect("Failed to upload file");
+    let upload_url = request_upload(token, file_title, file_size).await?;
+    send_file(upload_url, file_path, file_size).await?;
     Ok(())
 }
 
-async fn request_upload(token: &String, file_name: &String, file_size: u64) -> crate::Result<Url> {
+async fn request_upload(token: &String, file_name: &String, file_size: u64) -> BotResult<Url> {
     let url = String::from("https://api.pocketcasts.com/files/upload/request");
     let mut headers = HeaderMap::new();
     headers.insert(AUTHORIZATION, format!("Bearer {}", token).parse().unwrap());
@@ -58,7 +56,8 @@ async fn request_upload(token: &String, file_name: &String, file_size: u64) -> c
     Ok(url)
 }
 
-async fn send_file(url: Url, file_path: &PathBuf, file_size: u64) -> crate::Result<()> {
+// TODO: Properly deal with Pocketcast errors, such as an invalid auth token or account storage is full.
+async fn send_file(url: Url, file_path: &PathBuf, file_size: u64) -> BotResult<()> {
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, "audio/mp4".parse().unwrap());
     headers.insert(CONTENT_LENGTH, file_size.to_string().parse().unwrap());
@@ -81,6 +80,6 @@ async fn send_file(url: Url, file_path: &PathBuf, file_size: u64) -> crate::Resu
     if response.status().is_success() {
         return Ok(());
     } else {
-        panic!("AWS did not return 200: {}", response.status());
+        return Err(BotError::new(crate::types::BotErrorKind::UploadError));
     }
 }

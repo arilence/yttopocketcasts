@@ -43,7 +43,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
 COPY --from=yt-dlp /usr/local/bin/yt-dlp /usr/local/bin/yt-dlp
 RUN rustup component add rustfmt
 WORKDIR /app
-RUN mkdir /app/.cache
+RUN mkdir /tmp/.cache
 
 FROM docker.io/debian:$DEBIAN_VERSION
 RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
@@ -56,7 +56,7 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
     apt-get clean
 COPY --from=yt-dlp /usr/local/bin/yt-dlp /usr/local/bin/yt-dlp
 WORKDIR /app
-RUN mkdir /app/.cache
+RUN mkdir /tmp/.cache
 RUN useradd -ms /bin/bash app
 USER app
 COPY --from=builder /usr/local/cargo/bin/yttopocketcasts /app/botapp

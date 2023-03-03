@@ -1,19 +1,10 @@
-use std::{collections::HashMap, path::Path, sync::Arc, vec};
+use std::{path::Path, sync::Arc};
 
 use serde::Deserialize;
 use teloxide::{prelude::*, utils::command::BotCommands};
 use tokio::{fs, sync::RwLock};
 
-use crate::{downloader, filters, uploader};
-
-// From: https://docs.rs/once_cell/latest/once_cell/
-// As advised by rust-lang/regex: "Avoid compiling the same regex in a loop"
-macro_rules! regex {
-    ($re:literal $(,)?) => {{
-        static RE: once_cell::sync::OnceCell<regex::Regex> = once_cell::sync::OnceCell::new();
-        RE.get_or_init(|| regex::Regex::new($re).unwrap())
-    }};
-}
+use crate::{database::Database, filters, queue::Queue, user::User};
 
 // Prevents serde from panicking when trying to parse env vars that don't exist
 fn default_user_ids() -> Vec<UserId> {
@@ -60,12 +51,31 @@ enum AdminCommands {
     DeleteCache,
 }
 
-pub async fn run_bot() {
+pub struct BotData {
+    pub db_client: Database,
+}
+
+impl BotData {
+    pub async fn new(db_client: Database) -> Self {
+        Self { db_client }
+    }
+}
+
+pub async fn run() {
     println!("Starting bot...");
-    let bot = Bot::from_env();
+
     let parameters =
         envy::from_env::<ConfigParameters>().expect("Failed to parse config parameters");
-    let user_tokens: Arc<RwLock<HashMap<UserId, String>>> = Arc::new(RwLock::new(HashMap::new()));
+
+    let db_client = Database::new().await;
+
+    let bot = teloxide::Bot::from_env();
+    let bot_data: Arc<RwLock<BotData>> =
+        Arc::new(RwLock::new(BotData::new(db_client.clone()).await));
+
+    let queue = Queue::new(bot.clone(), db_client.clone()).await;
+    let workers = 2;
+    queue.start(workers).await;
 
     let handler = Update::filter_message()
         // General commands: Anyone can use these commands
@@ -101,8 +111,8 @@ pub async fn run_bot() {
         // Unrecognized text
         .branch(Update::filter_message().endpoint(handle_unrecognized_messages));
 
-    Dispatcher::builder(bot, handler)
-        .dependencies(dptree::deps![parameters, Arc::clone(&user_tokens)])
+    Dispatcher::builder(bot.clone(), handler)
+        .dependencies(dptree::deps![parameters, bot_data])
         // All message branches failed
         .default_handler(|_upd| async move {
             // println!("Unhandled update: {:?}", upd);
@@ -120,8 +130,8 @@ pub async fn run_bot() {
 
 async fn handle_general_commands(
     _cfg: ConfigParameters,
-    _user_tokens: Arc<RwLock<HashMap<UserId, String>>>,
-    bot: Bot,
+    bot: teloxide::Bot,
+    _bot_data: Arc<RwLock<BotData>>,
     _me: teloxide::types::Me,
     msg: Message,
     cmd: GeneralCommands,
@@ -141,15 +151,15 @@ async fn handle_general_commands(
 
 async fn handle_trusted_commands(
     _cfg: ConfigParameters,
-    user_tokens: Arc<RwLock<HashMap<UserId, String>>>,
-    bot: Bot,
+    bot: teloxide::Bot,
+    bot_data: Arc<RwLock<BotData>>,
     _me: teloxide::types::Me,
     msg: Message,
     cmd: TrustedCommands,
 ) -> Result<(), teloxide::RequestError> {
     let text = match cmd {
-        TrustedCommands::Auth(token) => command_auth(&msg, user_tokens, token).await,
-        TrustedCommands::Clear => command_clear(&msg, user_tokens).await,
+        TrustedCommands::Auth(token) => command_auth(&msg, &bot_data, token).await,
+        TrustedCommands::Clear => command_clear(&msg, &bot_data).await,
     };
     bot.send_message(msg.chat.id, text).await?;
     Ok(())
@@ -157,8 +167,8 @@ async fn handle_trusted_commands(
 
 async fn handle_admin_commands(
     _cfg: ConfigParameters,
-    _user_tokens: Arc<RwLock<HashMap<UserId, String>>>,
-    bot: Bot,
+    bot: teloxide::Bot,
+    _bot_data: Arc<RwLock<BotData>>,
     _me: teloxide::types::Me,
     msg: Message,
     cmd: AdminCommands,
@@ -174,7 +184,7 @@ async fn handle_admin_commands(
             String::from("Commands updated")
         }
         AdminCommands::DeleteCache => {
-            let path = Path::new(".cache/");
+            let path = Path::new("/tmp/.cache/");
             let mut reader = fs::read_dir(path).await?;
             while let Ok(entry) = reader.next_entry().await {
                 match entry {
@@ -193,106 +203,117 @@ async fn handle_admin_commands(
 
 async fn handle_link_messages(
     cfg: ConfigParameters,
-    user_tokens: Arc<RwLock<HashMap<UserId, String>>>,
-    bot: Bot,
+    bot: teloxide::Bot,
+    bot_data: Arc<RwLock<BotData>>,
     _me: teloxide::types::Me,
     msg: Message,
 ) -> Result<(), teloxide::RequestError> {
-    let text = command_link(cfg, user_tokens, bot.clone(), msg.clone()).await;
+    let text = command_link(cfg, bot.clone(), &bot_data, msg.clone()).await;
     bot.send_message(msg.chat.id, text).await?;
     Ok(())
 }
 
 async fn handle_unrecognized_messages(
     _cfg: ConfigParameters,
-    _user_tokens: Arc<RwLock<HashMap<UserId, String>>>,
-    bot: Bot,
+    bot: teloxide::Bot,
+    _bot_data: Arc<RwLock<BotData>>,
     _me: teloxide::types::Me,
     msg: Message,
 ) -> Result<(), teloxide::RequestError> {
-    let text = String::from("Command not found.\n\nUse /start");
+    let text = String::from("Command not found. Use /start");
     bot.send_message(msg.chat.id, text).await?;
     Ok(())
 }
 
 async fn handle_unauthorized_message(
     _cfg: ConfigParameters,
-    _user_tokens: Arc<RwLock<HashMap<UserId, String>>>,
-    bot: Bot,
+    bot: teloxide::Bot,
+    _bot_data: Arc<RwLock<BotData>>,
     _me: teloxide::types::Me,
     msg: Message,
 ) -> Result<(), teloxide::RequestError> {
-    let text = String::from("You are not authorized to use this command.\n\nUse /start");
+    let text = String::from("You are not authorized to use this command. Use /start");
     bot.send_message(msg.chat.id, text).await?;
     Ok(())
 }
 
-async fn command_auth(
-    msg: &Message,
-    user_tokens: Arc<RwLock<HashMap<UserId, String>>>,
-    token: String,
-) -> String {
+async fn command_auth(msg: &Message, bot_data: &Arc<RwLock<BotData>>, token: String) -> String {
     // TODO: Use dialogues instead of command arguments. User issues `/auth` and bot waits for a second message with the auth token.
-    if token.is_empty() {
-        return String::from("Please provide a token.\n\nUsage: /auth [token]");
+    let mut db_client = bot_data.read().await.db_client.clone();
+    let user_id = match msg.from() {
+        Some(msg) => msg.id,
+        None => return String::from("Something went wrong. Please try again."),
+    };
+
+    match User::set_token(&mut db_client, user_id.to_string(), token).await {
+        Ok(_) => String::from("Token set. Start sending me some youtube videos."),
+        Err(error) => match error.kind {
+            crate::types::BotErrorKind::EmptyTokenError => {
+                String::from("Please provide a token. /auth [token]")
+            }
+            crate::types::BotErrorKind::InvalidTokenError => {
+                String::from("Token doesn't seem to be a valid JWT. /auth [token]")
+            }
+            crate::types::BotErrorKind::RedisError => {
+                String::from("Unable to save auth token. Please try again.")
+            }
+            _ => String::from("Something went wrong. Please try again."),
+        },
     }
-    let jwt_regex = regex!(r#"^([a-zA-Z0-9_=]+)\.([a-zA-Z0-9_=]+)\.([a-zA-Z0-9_\-\+/=]*)"#);
-    if !jwt_regex.is_match(&token) {
-        return String::from("Token doesn't seem to be a valid JWT.\n\nUsage: /auth [token]");
-    }
-    let user_id = msg.from().unwrap().id;
-    let mut tokens = user_tokens.write().await;
-    tokens.insert(user_id, token);
-    String::from("Token set.\n\nStart sending me some youtube videos.")
 }
 
-async fn command_clear(msg: &Message, user_tokens: Arc<RwLock<HashMap<UserId, String>>>) -> String {
-    let user_id = msg.from().unwrap().id;
-    let mut tokens = user_tokens.write().await;
-    match tokens.remove(&user_id) {
-        Some(_) => String::from("Token removed."),
-        None => String::from("No token found associated with your user id."),
+async fn command_clear(msg: &Message, bot_data: &Arc<RwLock<BotData>>) -> String {
+    let mut db_client = bot_data.read().await.db_client.clone();
+    let user_id = match msg.from() {
+        Some(msg) => msg.id,
+        None => return String::from("Something went wrong. Please try again."),
+    };
+
+    match User::delete_token(&mut db_client, user_id.to_string()).await {
+        Ok(_) => String::from("Token removed successfully."),
+        Err(error) => match error.kind {
+            crate::types::BotErrorKind::RedisError => {
+                String::from("Unable to remove token. Please try again.")
+            }
+            _ => String::from("Something went wrong. Please try again."),
+        },
     }
 }
 
 async fn command_link(
     _cfg: ConfigParameters,
-    user_tokens: Arc<RwLock<HashMap<UserId, String>>>,
-    bot: Bot,
+    _bot: teloxide::Bot,
+    bot_data: &Arc<RwLock<BotData>>,
     msg: Message,
 ) -> String {
-    let incoming_text = msg.text().unwrap_or_default();
-    // Dirty attempt at catching non-youtube links before sending them off to process
-    let yt_regex = regex!(
-        r#"(?:https?://)?(?:youtu\.be/|(?:www\.|m\.)?youtube\.com/(?:watch|v|embed)(?:\.php)?(?:\?.*v=|/))([a-zA-Z0-9_-]+)"#
-    );
-    if !yt_regex.is_match(incoming_text) {
-        return String::from("Please send a valid youtube link.");
-    }
-    // Check if user has set their auth token before sending a link
-    let user_id = msg.from().unwrap().id;
-    let tokens = user_tokens.read().await;
-    let token = match tokens.get(&user_id) {
-        Some(val) => val.clone(),
-        None => {
-            return String::from("Please set a token before sending videos\n\nUse: /auth [token]");
-        }
+    let mut db_client = bot_data.read().await.db_client.clone();
+    let user_id = match msg.from() {
+        Some(msg) => msg.id,
+        None => return String::from("Something went wrong. Please try again."),
     };
-    let url_string = String::from(incoming_text);
-    tokio::spawn(async move {
-        // TODO: Implement a processing queue
-        let file_info = downloader::download_audio(&url_string)
-            .await
-            .expect("Failed to download file");
-        bot.send_message(msg.chat.id, String::from("Uploading..."))
-            .await
-            .unwrap();
-        uploader::upload_audio(&token, &file_info.0, &file_info.1)
-            .await
-            .expect("Failed to upload file");
-        bot.send_message(msg.chat.id, String::from("Done!"))
-            .await
-            .unwrap();
-    });
-    String::from("Downloading...")
+    let chat_id = msg.chat.id;
+    let msg_text = msg.text().unwrap_or_default();
+
+    match Queue::add_request(
+        &mut db_client,
+        user_id.to_string(),
+        chat_id.to_string(),
+        msg_text.to_string(),
+    )
+    .await
+    {
+        Ok(_) => return String::from("Waiting to be processed..."),
+        Err(error) => match error.kind {
+            crate::types::BotErrorKind::EmptyTokenError => {
+                String::from("Please provide a token. /auth [token]")
+            }
+            crate::types::BotErrorKind::InvalidTokenError => {
+                String::from("Token doesn't seem to be a valid JWT. /auth [token]")
+            }
+            crate::types::BotErrorKind::InvalidUrlError => {
+                return String::from("Please send a valid youtube link.");
+            }
+            _ => String::from("Unable to process request"),
+        },
+    }
 }

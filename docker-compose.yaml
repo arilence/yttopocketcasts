@@ -1,24 +1,16 @@
 version: "3.7"
-x-environment: &default-environment
-    TEMP: TEMP
 services:
     app:
         build:
             context: ./
             dockerfile: ./Dockerfile
             target: "development"
-        environment:
-            <<: *default-environment
-            TEMP: TEST
         volumes:
             - ./:/app
         command: sleep infinity
     redis:
         image: redis/redis-stack:6.2.6-v4
         restart: unless-stopped
-        environment:
-            <<: *default-environment
-            TEMP: HELLO
         ports:
             - 6379:6379
             - 8001:8001

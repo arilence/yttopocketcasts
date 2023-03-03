@@ -1,24 +1,23 @@
-use dotenvy::dotenv;
 use warp::Filter;
 
 mod bot;
+mod database;
 mod downloader;
 mod filters;
+mod queue;
+mod types;
 mod uploader;
-
-// TODO: Implement actual error types
-pub type Error = Box<dyn std::error::Error + Send + Sync>;
-pub type Result<T> = std::result::Result<T, Error>;
+mod user;
 
 #[tokio::main]
 async fn main() {
     // Load environment varilable from .env if available
-    dotenv().ok();
+    dotenvy::dotenv().ok();
 
     // Fly.io requires a webserver to determine availability
     tokio::spawn(run_webserver());
 
-    bot::run_bot().await;
+    bot::run().await;
 }
 
 async fn run_webserver() {
