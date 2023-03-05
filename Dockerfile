@@ -35,9 +35,9 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
     apt-get install -y curl python3 python3-pip && \
     rm -rf /var/lib/apt/lists/* && \
     apt-get clean
-# Latest yt-dlp release is broken, temporarily using unofficial daily build of master branch to fix it.
-# RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/download/2023.02.17/yt-dlp -o /usr/local/bin/yt-dlp
-RUN curl -L https://github.com/ytdl-patched/yt-dlp/releases/download/2023.03.01.19419/yt-dlp -o /usr/local/bin/yt-dlp
+# If yt-dlp ever becomes broken, with fixes in master branch, use the nightly version:
+# RUN curl -L https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/yt-dlp -o /usr/local/bin/yt-dlp
+RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/download/2023.03.04/yt-dlp -o /usr/local/bin/yt-dlp
 RUN chmod +x /usr/local/bin/yt-dlp
 
 FROM builder as development
