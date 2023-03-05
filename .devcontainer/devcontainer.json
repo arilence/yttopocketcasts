@@ -6,6 +6,9 @@
     "dockerComposeFile": "../docker-compose.yaml",
     "service": "app",
     "postCreateCommand": "cargo build",
+    "containerUser": "devuser",
+    "remoteUser": "devuser",
+    "updateRemoteUserUID": true,
     "customizations": {
         "vscode": {
             "extensions": [
