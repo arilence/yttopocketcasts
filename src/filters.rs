@@ -3,20 +3,20 @@ use teloxide::types::Message;
 use crate::bot::ConfigParameters;
 
 // Returns true if incoming message is from a Trusted or Admin user
-pub async fn is_trusted(cfg: ConfigParameters, msg: Message) -> bool {
+pub async fn is_authorized(cfg: ConfigParameters, msg: Message) -> bool {
     msg.from()
         .map(|user| {
             cfg.trusted_user_ids.iter().any(|&i| i == user.id)
                 || cfg.admin_user_ids.iter().any(|&i| i == user.id)
         })
-        .unwrap_or_default()
+        .unwrap_or(false)
 }
 
 // Returns true if incoming message is from an Admin user
 pub async fn is_admin(cfg: ConfigParameters, msg: Message) -> bool {
     msg.from()
         .map(|user| cfg.admin_user_ids.iter().any(|&i| i == user.id))
-        .unwrap_or_default()
+        .unwrap_or(false)
 }
 
 // Returns true if incoming message starts with "http"

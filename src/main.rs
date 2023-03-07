@@ -4,6 +4,7 @@ mod bot;
 mod database;
 mod downloader;
 mod filters;
+mod handlers;
 mod queue;
 mod types;
 mod uploader;

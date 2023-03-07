@@ -1,10 +1,12 @@
-use std::{path::Path, sync::Arc};
+use std::sync::Arc;
 
 use serde::Deserialize;
-use teloxide::{prelude::*, utils::command::BotCommands};
-use tokio::{fs, sync::RwLock};
+use teloxide::{
+    dispatching::dialogue::InMemStorage, dptree::case, prelude::*, utils::command::BotCommands,
+};
+use tokio::sync::RwLock;
 
-use crate::{database::Database, filters, queue::Queue, user::User};
+use crate::{database::Database, filters, handlers, queue::Queue};
 
 // Prevents serde from panicking when trying to parse env vars that don't exist
 fn default_user_ids() -> Vec<UserId> {
@@ -25,25 +27,22 @@ pub struct ConfigParameters {
 // TODO: Setup bot_commands() and set_my_commands() to populate the bot's list of known commands
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase", description = "Bot Commands")]
-enum GeneralCommands {
+pub enum Commands {
     #[command(description = "show intro message")]
     Start,
     #[command(description = "get user id")]
     Id,
-}
-
-#[derive(BotCommands, Clone)]
-#[command(rename_rule = "lowercase", description = "Bot Commands")]
-enum TrustedCommands {
-    #[command(description = "set Pocket Casts auth token")]
-    Auth(String),
+    #[command(description = "set auth token")]
+    Auth,
     #[command(description = "unset auth token")]
     Clear,
+    #[command(description = "cancel auth dialogue")]
+    Cancel,
 }
 
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase", description = "Bot Commands")]
-enum AdminCommands {
+pub enum AdminCommands {
     #[command(description = "update list of bot commands on Telegram")]
     SetCommands,
     // NOTE: This deletes all files without waiting for other processes to finish
@@ -59,6 +58,13 @@ impl BotData {
     pub async fn new(db_client: Database) -> Self {
         Self { db_client }
     }
+}
+
+#[derive(Clone, Default)]
+pub enum CommandState {
+    #[default]
+    Start,
+    ReceiveAuthToken,
 }
 
 pub async fn run() {
@@ -78,45 +84,68 @@ pub async fn run() {
     queue.start(workers).await;
 
     let handler = Update::filter_message()
-        // General commands: Anyone can use these commands
+        .enter_dialogue::<Message, InMemStorage<CommandState>, CommandState>()
+        .branch(
+            case![CommandState::Start]
+                .branch(
+                    dptree::entry()
+                        .filter_command::<Commands>()
+                        //
+                        // These commands are available to anyone
+                        .branch(case![Commands::Start].endpoint(handlers::start))
+                        .branch(case![Commands::Id].endpoint(handlers::id))
+                        //
+                        // These commands are only available to authorized users
+                        .filter_async(filters::is_authorized)
+                        .branch(case![Commands::Auth].endpoint(handlers::auth_initiate))
+                        .branch(case![Commands::Clear].endpoint(handlers::auth_clear)),
+                )
+                .branch(
+                    dptree::entry()
+                        .filter_command::<AdminCommands>()
+                        //
+                        // These commands are only available to admin users
+                        .filter_async(filters::is_admin)
+                        .branch(
+                            case![AdminCommands::SetCommands].endpoint(handlers::admin_set_command),
+                        )
+                        .branch(
+                            case![AdminCommands::DeleteCache]
+                                .endpoint(handlers::admin_delete_cache),
+                        ),
+                ),
+        )
         .branch(
             dptree::entry()
-                .filter_command::<GeneralCommands>()
-                .endpoint(handle_general_commands),
+                .filter_command::<Commands>()
+                //
+                // Cancel command needs to be available regardless of state to stop any ongoing dialogue
+                .filter_async(filters::is_authorized)
+                .branch(case![Commands::Cancel].endpoint(handlers::auth_cancel)),
         )
-        // Trusted commands: both trusted and admin users can use these
         .branch(
             dptree::entry()
-                .filter_command::<TrustedCommands>()
-                .branch(dptree::filter_async(filters::is_trusted).endpoint(handle_trusted_commands))
-                .endpoint(handle_unauthorized_message),
+                .filter_async(filters::is_authorized)
+                .branch(
+                    case![CommandState::Start]
+                        .filter_async(filters::is_link)
+                        .endpoint(handlers::receive_url),
+                )
+                //
+                // Only look for tokens when in "ReceiveAuthToken" state
+                .branch(case![CommandState::ReceiveAuthToken].endpoint(handlers::receive_token)),
         )
-        // Admin commands: only admin users can use these
-        // These commands are hidden to all non-admin users and appear as "Unknown command"
-        .branch(
-            dptree::entry()
-                .filter_command::<AdminCommands>()
-                .branch(dptree::filter_async(filters::is_admin).endpoint(handle_admin_commands))
-                .endpoint(handle_unrecognized_messages),
-        )
-        // Match non-command messages such as Youtube links
-        // Limited to trusted and admin users
-        .branch(
-            Update::filter_message().branch(
-                dptree::filter_async(filters::is_trusted)
-                    .filter_async(filters::is_link)
-                    .endpoint(handle_link_messages),
-            ),
-        )
-        // Unrecognized text
-        .branch(Update::filter_message().endpoint(handle_unrecognized_messages));
+        .endpoint(handlers::unrecognized);
 
     Dispatcher::builder(bot.clone(), handler)
-        .dependencies(dptree::deps![parameters, bot_data])
+        .dependencies(dptree::deps![
+            parameters,
+            bot_data,
+            InMemStorage::<CommandState>::new()
+        ])
         // All message branches failed
-        .default_handler(|_upd| async move {
-            // println!("Unhandled update: {:?}", upd);
-            println!("Unhandled update");
+        .default_handler(|upd| async move {
+            println!("Unhandled update: {:?}", upd);
         })
         // The dispatcher failed
         .error_handler(LoggingErrorHandler::with_custom_text(
@@ -126,194 +155,4 @@ pub async fn run() {
         .build()
         .dispatch()
         .await;
-}
-
-async fn handle_general_commands(
-    _cfg: ConfigParameters,
-    bot: teloxide::Bot,
-    _bot_data: Arc<RwLock<BotData>>,
-    _me: teloxide::types::Me,
-    msg: Message,
-    cmd: GeneralCommands,
-) -> Result<(), teloxide::RequestError> {
-    let text = match cmd {
-        GeneralCommands::Start => {
-            String::from("This bot sends Youtube videos as audio podcasts to your personal Pocket Casts files section.\n\nTo get user id: /id\n\nTo start: /auth [pocketcasts token]")
-        }
-        GeneralCommands::Id => {
-            let user_id = msg.from().unwrap().id;
-            format!("User Id: {}", user_id)
-        }
-    };
-    bot.send_message(msg.chat.id, text).await?;
-    Ok(())
-}
-
-async fn handle_trusted_commands(
-    _cfg: ConfigParameters,
-    bot: teloxide::Bot,
-    bot_data: Arc<RwLock<BotData>>,
-    _me: teloxide::types::Me,
-    msg: Message,
-    cmd: TrustedCommands,
-) -> Result<(), teloxide::RequestError> {
-    let text = match cmd {
-        TrustedCommands::Auth(token) => command_auth(&msg, &bot_data, token).await,
-        TrustedCommands::Clear => command_clear(&msg, &bot_data).await,
-    };
-    bot.send_message(msg.chat.id, text).await?;
-    Ok(())
-}
-
-async fn handle_admin_commands(
-    _cfg: ConfigParameters,
-    bot: teloxide::Bot,
-    _bot_data: Arc<RwLock<BotData>>,
-    _me: teloxide::types::Me,
-    msg: Message,
-    cmd: AdminCommands,
-) -> Result<(), teloxide::RequestError> {
-    let text = match cmd {
-        AdminCommands::SetCommands => {
-            let commands = [
-                GeneralCommands::bot_commands().as_slice(),
-                TrustedCommands::bot_commands().as_slice(),
-            ]
-            .concat();
-            bot.set_my_commands(commands).await?;
-            String::from("Commands updated")
-        }
-        AdminCommands::DeleteCache => {
-            let path = Path::new("/tmp/.cache/");
-            let mut reader = fs::read_dir(path).await?;
-            while let Ok(entry) = reader.next_entry().await {
-                match entry {
-                    Some(val) => {
-                        fs::remove_file(val.path()).await?;
-                    }
-                    None => break,
-                }
-            }
-            String::from("Cleared .cache folder")
-        }
-    };
-    bot.send_message(msg.chat.id, text).await?;
-    Ok(())
-}
-
-async fn handle_link_messages(
-    cfg: ConfigParameters,
-    bot: teloxide::Bot,
-    bot_data: Arc<RwLock<BotData>>,
-    _me: teloxide::types::Me,
-    msg: Message,
-) -> Result<(), teloxide::RequestError> {
-    let text = command_link(cfg, bot.clone(), &bot_data, msg.clone()).await;
-    bot.send_message(msg.chat.id, text).await?;
-    Ok(())
-}
-
-async fn handle_unrecognized_messages(
-    _cfg: ConfigParameters,
-    bot: teloxide::Bot,
-    _bot_data: Arc<RwLock<BotData>>,
-    _me: teloxide::types::Me,
-    msg: Message,
-) -> Result<(), teloxide::RequestError> {
-    let text = String::from("Command not found. Use /start");
-    bot.send_message(msg.chat.id, text).await?;
-    Ok(())
-}
-
-async fn handle_unauthorized_message(
-    _cfg: ConfigParameters,
-    bot: teloxide::Bot,
-    _bot_data: Arc<RwLock<BotData>>,
-    _me: teloxide::types::Me,
-    msg: Message,
-) -> Result<(), teloxide::RequestError> {
-    let text = String::from("You are not authorized to use this command. Use /start");
-    bot.send_message(msg.chat.id, text).await?;
-    Ok(())
-}
-
-async fn command_auth(msg: &Message, bot_data: &Arc<RwLock<BotData>>, token: String) -> String {
-    // TODO: Use dialogues instead of command arguments. User issues `/auth` and bot waits for a second message with the auth token.
-    let mut db_client = bot_data.read().await.db_client.clone();
-    let user_id = match msg.from() {
-        Some(msg) => msg.id,
-        None => return String::from("Something went wrong. Please try again."),
-    };
-
-    match User::set_token(&mut db_client, user_id.to_string(), token).await {
-        Ok(_) => String::from("Token set. Start sending me some youtube videos."),
-        Err(error) => match error.kind {
-            crate::types::BotErrorKind::EmptyTokenError => {
-                String::from("Please provide a token. /auth [token]")
-            }
-            crate::types::BotErrorKind::InvalidTokenError => {
-                String::from("Token doesn't seem to be a valid JWT. /auth [token]")
-            }
-            crate::types::BotErrorKind::RedisError => {
-                String::from("Unable to save auth token. Please try again.")
-            }
-            _ => String::from("Something went wrong. Please try again."),
-        },
-    }
-}
-
-async fn command_clear(msg: &Message, bot_data: &Arc<RwLock<BotData>>) -> String {
-    let mut db_client = bot_data.read().await.db_client.clone();
-    let user_id = match msg.from() {
-        Some(msg) => msg.id,
-        None => return String::from("Something went wrong. Please try again."),
-    };
-
-    match User::delete_token(&mut db_client, user_id.to_string()).await {
-        Ok(_) => String::from("Token removed successfully."),
-        Err(error) => match error.kind {
-            crate::types::BotErrorKind::RedisError => {
-                String::from("Unable to remove token. Please try again.")
-            }
-            _ => String::from("Something went wrong. Please try again."),
-        },
-    }
-}
-
-async fn command_link(
-    _cfg: ConfigParameters,
-    _bot: teloxide::Bot,
-    bot_data: &Arc<RwLock<BotData>>,
-    msg: Message,
-) -> String {
-    let mut db_client = bot_data.read().await.db_client.clone();
-    let user_id = match msg.from() {
-        Some(msg) => msg.id,
-        None => return String::from("Something went wrong. Please try again."),
-    };
-    let chat_id = msg.chat.id;
-    let msg_text = msg.text().unwrap_or_default();
-
-    match Queue::add_request(
-        &mut db_client,
-        user_id.to_string(),
-        chat_id.to_string(),
-        msg_text.to_string(),
-    )
-    .await
-    {
-        Ok(_) => return String::from("Waiting to be processed..."),
-        Err(error) => match error.kind {
-            crate::types::BotErrorKind::EmptyTokenError => {
-                String::from("Please provide a token. /auth [token]")
-            }
-            crate::types::BotErrorKind::InvalidTokenError => {
-                String::from("Token doesn't seem to be a valid JWT. /auth [token]")
-            }
-            crate::types::BotErrorKind::InvalidUrlError => {
-                return String::from("Please send a valid youtube link.");
-            }
-            _ => String::from("Unable to process request"),
-        },
-    }
 }

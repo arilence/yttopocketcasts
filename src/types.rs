@@ -3,7 +3,12 @@ use std::{
     string::FromUtf8Error,
 };
 
+use teloxide::{dispatching::dialogue::InMemStorage, prelude::Dialogue};
 use tokio::io;
+
+use crate::bot::CommandState;
+
+pub type BotDialogue = Dialogue<CommandState, InMemStorage<CommandState>>;
 
 pub type BotResult<T> = Result<T, BotError>;
 
