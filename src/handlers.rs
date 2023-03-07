@@ -11,8 +11,7 @@ use crate::{
 };
 
 pub async fn unrecognized(bot: teloxide::Bot, msg: Message) -> Result<(), teloxide::RequestError> {
-    bot.send_message(msg.chat.id, "Command not found. Use /start")
-        .await?;
+    bot.send_message(msg.chat.id, "Command not found.").await?;
     Ok(())
 }
 
@@ -159,15 +158,15 @@ pub async fn receive_url(
         Ok(_) => String::from("Waiting to be processed..."),
         Err(error) => match error.kind {
             crate::types::BotErrorKind::EmptyTokenError => {
-                String::from("Please provide a token with /auth")
+                String::from("Please set an /auth token before sending URLs.")
             }
             crate::types::BotErrorKind::InvalidTokenError => {
-                String::from("Token doesn't seem to be a valid JWT. Use /auth")
+                String::from("Please set a valid /auth token before sending URLs")
             }
             crate::types::BotErrorKind::InvalidUrlError => {
                 String::from("Please send a valid youtube link.")
             }
-            _ => String::from("Unable to process request"),
+            _ => String::from("Unable to process request. Please try again."),
         },
     };
     bot.send_message(msg.chat.id, output).await?;
@@ -179,7 +178,8 @@ pub async fn admin_set_command(
     msg: Message,
 ) -> Result<(), teloxide::RequestError> {
     bot.set_my_commands(Commands::bot_commands()).await?;
-    bot.send_message(msg.chat.id, "Commands updated.").await?;
+    bot.send_message(msg.chat.id, "Bot commands updated.")
+        .await?;
     Ok(())
 }
 
@@ -197,7 +197,7 @@ pub async fn admin_delete_cache(
             None => break,
         }
     }
-    bot.send_message(msg.chat.id, "Cleared .cache folder.")
+    bot.send_message(msg.chat.id, "Cleared `.cache` folder.")
         .await?;
     Ok(())
 }
