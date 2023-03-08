@@ -83,6 +83,12 @@ pub async fn run() {
     let workers = 2;
     queue.start(workers).await;
 
+    // Update telegram's command list
+    match bot.set_my_commands(Commands::bot_commands()).await {
+        Ok(_) => (),
+        Err(_) => println!("Error: Could not set bot commands on boot"),
+    };
+
     let handler = Update::filter_message()
         .enter_dialogue::<Message, InMemStorage<CommandState>, CommandState>()
         .branch(
