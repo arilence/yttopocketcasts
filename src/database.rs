@@ -118,4 +118,15 @@ impl Database {
             Err(_) => return Err(BotError::new(BotErrorKind::RedisError)),
         }
     }
+
+    pub async fn delete_request(&mut self, processing_id: String) -> BotResult<()> {
+        if !processing_id.starts_with("yt_processing:") {
+            // TODO: we probably should have a generic "invalid value" error type
+            return Err(BotError::new(BotErrorKind::RedisError));
+        }
+        match self.publish_conn.del::<String, i64>(processing_id).await {
+            Ok(_) => Ok(()),
+            Err(_) => Err(BotError::new(BotErrorKind::RedisError)),
+        }
+    }
 }

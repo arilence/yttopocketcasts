@@ -33,23 +33,26 @@ impl Queue {
             let mut database = self.database.clone();
 
             tokio::spawn(async move {
+                // TODO: Better error handling / reporting
                 loop {
-                    let (_key, value) = match database.wait_for_request().await {
+                    let (_key, processing_id) = match database.wait_for_request().await {
                         Ok((key, value)) => (key, value),
-                        // TODO: Indicate there was an error with processing
                         Err(_) => continue,
                     };
-                    let data = Queue::get_request(&mut database, value).await;
-                    let token = match User::get_token(&mut database, data[0].to_string()).await {
+                    let request = Queue::get_request(&mut database, &processing_id).await;
+                    let user_id = request[0].to_string();
+                    let token = match User::get_token(&mut database, user_id).await {
                         Ok(value) => value,
-                        // TODO: Indicate there was an error with processing
                         Err(_) => continue,
                     };
-                    match Queue::processing_request(&bot, &token, &data).await {
-                        // TODO: Indicate there was an error with processing
-                        Ok(_) => continue,
+                    match Queue::processing_request(&bot, &token, &request).await {
+                        Ok(_) => (),
                         Err(_) => continue,
                     }
+                    match Queue::delete_request(&mut database, &processing_id).await {
+                        Ok(_) => (),
+                        Err(_) => continue,
+                    };
                 }
             });
         }
@@ -70,8 +73,8 @@ impl Queue {
         Ok(())
     }
 
-    pub async fn get_request(database: &mut Database, key: String) -> Vec<String> {
-        match database.get_request(key).await {
+    pub async fn get_request(database: &mut Database, processing_id: &String) -> Vec<String> {
+        match database.get_request(processing_id.to_string()).await {
             Ok(vec) => vec,
             Err(_) => Vec::new(),
         }
@@ -93,6 +96,11 @@ impl Queue {
             return Err(BotError::new(BotErrorKind::InvalidUrlError));
         }
         database.add_request(user_id, chat_id, msg_text).await?;
+        Ok(())
+    }
+
+    pub async fn delete_request(database: &mut Database, processing_id: &String) -> BotResult<()> {
+        database.delete_request(processing_id.to_string()).await?;
         Ok(())
     }
 }
